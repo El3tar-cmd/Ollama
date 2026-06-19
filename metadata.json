@@ -1,0 +1,6 @@
+{
+  "name": "Ollama Server",
+  "description": "Port of Ollama Server to native Android (Kotlin & Jetpack Compose). Manage, pull, delete, and converse with local language models directly on your device with one-click background deployment.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
