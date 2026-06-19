@@ -104,6 +104,9 @@ class MainViewModel(context: Context) : ViewModel() {
     // Log terminal list
     val liveLogs = mutableStateListOf<String>()
 
+    // Cloud auth URL
+    var authLoginUrl by mutableStateOf<String?>(null)
+
     init {
         checkBinaryInstalled()
         refreshServiceStatus()
@@ -134,10 +137,12 @@ class MainViewModel(context: Context) : ViewModel() {
                 if (apiOnline) {
                     // Update active model lists
                     api.listModels(base) { list, _ ->
-                        if (list != null) {
-                            modelList = list
-                            if (selectedModelChat.isEmpty() && list.isNotEmpty()) {
-                                selectedModelChat = list.first().name
+                        viewModelScope.launch(Dispatchers.Main) {
+                            if (list != null) {
+                                modelList = list
+                                if (selectedModelChat.isEmpty() && list.isNotEmpty()) {
+                                    selectedModelChat = list.first().name
+                                }
                             }
                         }
                     }
@@ -179,6 +184,35 @@ class MainViewModel(context: Context) : ViewModel() {
                 }
             }
         )
+    }
+
+    fun triggerLoginCommand(context: Context) {
+        val pubKeyFile = java.io.File(context.filesDir, ".ollama/id_ed25519.pub")
+        if (pubKeyFile.exists()) {
+            val pubKeyStr = pubKeyFile.readText().trim()
+            val encodedKey = android.util.Base64.encodeToString(pubKeyStr.toByteArray(), android.util.Base64.NO_WRAP)
+            authLoginUrl = "https://ollama.com/connect?name=AndroidDevice&key=$encodedKey"
+            viewModelScope.launch(Dispatchers.Main) {
+                liveLogs.add("Login URL generated from existing SSH key.")
+            }
+        } else {
+            viewModelScope.launch(Dispatchers.Main) {
+                Toast.makeText(context, "No SSH key found. Try pulling any cloud model first to generate it automatically.", Toast.LENGTH_LONG).show()
+                liveLogs.add("Login Error: Public key not generated yet. Please pull a model or start the server to trigger key generation.")
+            }
+        }
+    }
+
+    fun triggerLogoutCommand(context: Context) {
+        val ollamaDir = java.io.File(context.filesDir, ".ollama")
+        val privKeyFile = java.io.File(ollamaDir, "id_ed25519")
+        val pubKeyFile = java.io.File(ollamaDir, "id_ed25519.pub")
+        if (privKeyFile.exists()) privKeyFile.delete()
+        if (pubKeyFile.exists()) pubKeyFile.delete()
+        viewModelScope.launch(Dispatchers.Main) {
+            liveLogs.add("Logged out. Local SSH keys removed.")
+            Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun toggleOllamaService(context: Context) {
@@ -233,7 +267,9 @@ class MainViewModel(context: Context) : ViewModel() {
                     Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                     // Force refresh list
                     api.listModels(base) { list, _ ->
-                        if (list != null) modelList = list
+                        viewModelScope.launch(Dispatchers.Main) {
+                            if (list != null) modelList = list
+                        }
                     }
                 }
             }
@@ -247,7 +283,9 @@ class MainViewModel(context: Context) : ViewModel() {
             viewModelScope.launch(Dispatchers.Main) {
                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 api.listModels(base) { list, _ ->
-                    if (list != null) modelList = list
+                    viewModelScope.launch(Dispatchers.Main) {
+                        if (list != null) modelList = list
+                    }
                 }
             }
         }
@@ -302,6 +340,28 @@ class MainViewModel(context: Context) : ViewModel() {
             OllamaService.logBuffer.clear()
         }
         liveLogs.clear()
+    }
+
+    var terminalInput by mutableStateOf("")
+
+    fun executeTerminalCommand(context: Context) {
+        val cmds = terminalInput.trim().split("\\s+".toRegex()).filter { it.isNotBlank() }
+        terminalInput = ""
+        if (cmds.isEmpty()) return
+        
+        liveLogs.add("> ollama ${cmds.joinToString(" ")}")
+        authLoginUrl = null
+
+        executor.execOllamaCommand(*cmds.toTypedArray()) { logLine ->
+            viewModelScope.launch(Dispatchers.Main) {
+                liveLogs.add(logLine)
+                val urlRegex = "(https://ollama\\.com/connect\\S+)".toRegex()
+                val match = urlRegex.find(logLine)
+                if (match != null) {
+                    authLoginUrl = match.value
+                }
+            }
+        }
     }
 }
 
@@ -480,6 +540,34 @@ fun MainAppScreen() {
             }
         }
     }
+
+    if (vm.authLoginUrl != null) {
+        val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+        AlertDialog(
+            onDismissRequest = { vm.authLoginUrl = null },
+            title = { Text("Ollama Login URL Generated") },
+            text = { Text("Please complete the sign-in on your browser:\n\n${vm.authLoginUrl}\n\nMake sure to sign in, then click Open Browser to add your device key to your account.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        val i = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(vm.authLoginUrl))
+                        context.startActivity(i)
+                    } catch (e: Exception) {
+                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(vm.authLoginUrl!!))
+                        Toast.makeText(context, "Copied URL to clipboard instead", Toast.LENGTH_SHORT).show()
+                    }
+                    vm.authLoginUrl = null
+                }) {
+                    Text("Open Browser")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.authLoginUrl = null }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -614,6 +702,43 @@ fun OperationsTab(vm: MainViewModel, context: Context) {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Cloud Authentication
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Cloud Authentication",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Sign in to run cloud models from Ollama.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = { vm.triggerLoginCommand(context) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Login")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { vm.triggerLogoutCommand(context) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Logout")
+                    }
+                }
             }
         }
     }
@@ -1058,5 +1183,23 @@ fun SystemLogsTab(vm: MainViewModel) {
                 }
             }
         }
+        Spacer(modifier = Modifier.height(12.dp))
+        val context = LocalContext.current
+        OutlinedTextField(
+            value = vm.terminalInput,
+            onValueChange = { vm.terminalInput = it },
+            modifier = Modifier.fillMaxWidth().testTag("terminal_input"),
+            textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+            placeholder = { Text("Command (e.g. login)") },
+            prefix = { Text("ollama ", fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary) },
+            singleLine = true,
+            trailingIcon = {
+                IconButton(onClick = { vm.executeTerminalCommand(context) }, modifier = Modifier.testTag("terminal_exec_btn")) {
+                    Icon(Icons.Filled.Send, contentDescription = "Execute Command")
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { vm.executeTerminalCommand(context) })
+        )
     }
 }

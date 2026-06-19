@@ -78,6 +78,37 @@ class OllamaExecutor(private val context: Context) {
         }
     }
 
+    fun execOllamaCommand(vararg args: String, onLog: (String) -> Unit) {
+        setupEnvironment()
+        if (!ollamaFile.exists()) {
+            onLog("Error: Ollama executable not found.")
+            return
+        }
+
+        Thread {
+            try {
+                val pb = ProcessBuilder(ollamaFile.absolutePath, *args)
+                val env = pb.environment()
+                env["OLLAMA_MODELS"] = modelsDir.absolutePath
+                env["HOME"] = context.filesDir.absolutePath
+                env["TMPDIR"] = context.cacheDir.absolutePath
+                env["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir
+
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+
+                val reader = proc.inputStream.bufferedReader()
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    onLog(line ?: "")
+                }
+                proc.waitFor()
+            } catch (e: Exception) {
+                onLog("Error executing command: ${e.message}")
+            }
+        }.start()
+    }
+
     fun downloadBinary(
         downloadUrlStr: String,
         onProgress: (Int, String) -> Unit,

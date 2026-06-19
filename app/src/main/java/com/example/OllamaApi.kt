@@ -141,6 +141,10 @@ class OllamaApi {
                         if (line.isNotEmpty()) {
                             try {
                                 val json = JSONObject(line)
+                                if (json.has("error")) {
+                                    onComplete(false, json.getString("error"))
+                                    return
+                                }
                                 val status = json.optString("status", "")
                                 val total = json.optLong("total", 0L)
                                 val completed = json.optLong("completed", 0L)
@@ -215,6 +219,10 @@ class OllamaApi {
                         if (line.isNotEmpty()) {
                             try {
                                 val json = JSONObject(line)
+                                if (json.has("error")) {
+                                    onComplete(false, json.getString("error"))
+                                    return
+                                }
                                 val done = json.optBoolean("done", false)
                                 val msgObj = json.optJSONObject("message")
                                 val token = msgObj?.optString("content", "") ?: ""
