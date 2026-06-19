@@ -116,6 +116,8 @@ dependencies {
   implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("org.bouncycastle:bcprov-jdk18on:1.77")
+  implementation("org.bouncycastle:bcpkix-jdk18on:1.77")
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

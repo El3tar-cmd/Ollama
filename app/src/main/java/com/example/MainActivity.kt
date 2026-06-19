@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.*
 
@@ -187,31 +188,53 @@ class MainViewModel(context: Context) : ViewModel() {
     }
 
     fun triggerLoginCommand(context: Context) {
-        val pubKeyFile = java.io.File(context.filesDir, ".ollama/id_ed25519.pub")
-        if (pubKeyFile.exists()) {
-            val pubKeyStr = pubKeyFile.readText().trim()
-            val encodedKey = android.util.Base64.encodeToString(pubKeyStr.toByteArray(), android.util.Base64.NO_WRAP)
-            authLoginUrl = "https://ollama.com/connect?name=AndroidDevice&key=$encodedKey"
-            viewModelScope.launch(Dispatchers.Main) {
-                liveLogs.add("Login URL generated from existing SSH key.")
+        viewModelScope.launch(Dispatchers.IO) {
+            val ollamaDir = java.io.File(context.filesDir, ".ollama")
+            if (!ollamaDir.exists()) ollamaDir.mkdirs()
+            
+            val privKeyFile = java.io.File(ollamaDir, "id_ed25519")
+            val pubKeyFile = java.io.File(ollamaDir, "id_ed25519.pub")
+
+            val pubKeyStr: String
+            if (!privKeyFile.exists() || !pubKeyFile.exists()) {
+                val (privPem, pubSsh) = SshKeyGen.generateEd25519Key()
+                privKeyFile.writeText(privPem)
+                privKeyFile.setReadable(true, true)
+                privKeyFile.setWritable(true, true)
+                
+                pubKeyFile.writeText(pubSsh)
+                pubKeyStr = pubSsh
+                withContext(Dispatchers.Main) {
+                    liveLogs.add("Generated new Ed25519 SSH keypair.")
+                }
+            } else {
+                pubKeyStr = pubKeyFile.readText().trim()
             }
-        } else {
-            viewModelScope.launch(Dispatchers.Main) {
-                Toast.makeText(context, "No SSH key found. Try pulling any cloud model first to generate it automatically.", Toast.LENGTH_LONG).show()
-                liveLogs.add("Login Error: Public key not generated yet. Please pull a model or start the server to trigger key generation.")
+
+            val parts = pubKeyStr.split(" ")
+            val keyToEncode = if (parts.size >= 2) "${parts[0]} ${parts[1]}" else pubKeyStr
+            val encodedKey = android.util.Base64.encodeToString(
+                keyToEncode.toByteArray(), 
+                android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+            )
+            withContext(Dispatchers.Main) {
+                authLoginUrl = "https://ollama.com/connect?name=AndroidDevice&key=$encodedKey"
+                liveLogs.add("Login URL generated.")
             }
         }
     }
 
     fun triggerLogoutCommand(context: Context) {
-        val ollamaDir = java.io.File(context.filesDir, ".ollama")
-        val privKeyFile = java.io.File(ollamaDir, "id_ed25519")
-        val pubKeyFile = java.io.File(ollamaDir, "id_ed25519.pub")
-        if (privKeyFile.exists()) privKeyFile.delete()
-        if (pubKeyFile.exists()) pubKeyFile.delete()
-        viewModelScope.launch(Dispatchers.Main) {
-            liveLogs.add("Logged out. Local SSH keys removed.")
-            Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+        viewModelScope.launch(Dispatchers.IO) {
+            val ollamaDir = java.io.File(context.filesDir, ".ollama")
+            val privKeyFile = java.io.File(ollamaDir, "id_ed25519")
+            val pubKeyFile = java.io.File(ollamaDir, "id_ed25519.pub")
+            if (privKeyFile.exists()) privKeyFile.delete()
+            if (pubKeyFile.exists()) pubKeyFile.delete()
+            withContext(Dispatchers.Main) {
+                liveLogs.add("Logged out. Local SSH keys removed.")
+                Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
